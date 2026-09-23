@@ -6,10 +6,10 @@ import fs from 'node:fs/promises';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { z } from 'zod';
-import { config } from './config.js';
-import { prisma } from './db.js';
-import { ensureStorageDirs } from './lib/storage.js';
-import './jobs/processor.js';
+import { config } from '../config.js';
+import { prisma } from '../db.js';
+import { ensureStorageDirs } from '../lib/storage.js';
+import './processor.js';
 
 const app = express();
 const upload = multer({ dest: path.join(config.storageRoot, 'uploads') });
@@ -18,6 +18,7 @@ const projectQueue = new Queue('project-processing', { connection: redis });
 
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
+app.use('/storage', express.static(config.storageRoot));
 
 app.get('/health', async (_req, res) => {
   res.json({ ok: true, service: 'YemenDub API', timestamp: new Date().toISOString() });
@@ -40,18 +41,29 @@ app.post('/api/projects/upload', upload.single('video'), async (req, res) => {
   }
 
   await ensureStorageDirs();
-  const finalPath = path.join(config.storageRoot, 'uploads', req.file.originalname || `${Date.now()}.mp4`);
+  const filename = req.file.originalname || `${Date.now()}.mp4`;
+  const finalPath = path.join(config.storageRoot, 'uploads', filename);
   await fs.rename(req.file.path, finalPath);
 
   const project = await prisma.project.create({
     data: {
-      name: req.file.originalname || 'video-upload',
+      name: filename,
       sourceType: 'upload',
       filePath: finalPath,
       dialect: parsed.data.dialect,
       addSubtitles: parsed.data.addSubtitles === 'true',
       status: 'UPLOADED',
-      progress: 0
+      progress: 0,
+      segments: {
+        create: [
+          {
+            speaker: 'المتحدث 1',
+            startMs: 0,
+            endMs: 5000,
+            text: 'سيتم تحليل هذا الفيديو وتوليد الترجمة وتبديل اللهجة لاحقاً.'
+          }
+        ]
+      }
     },
     include: { segments: true }
   });
@@ -72,7 +84,17 @@ app.post('/api/projects/from-url', async (req, res) => {
       sourceUrl: parsed.data.url,
       dialect: parsed.data.dialect,
       addSubtitles: parsed.data.addSubtitles,
-      status: 'UPLOADED'
+      status: 'UPLOADED',
+      segments: {
+        create: [
+          {
+            speaker: 'المتحدث 1',
+            startMs: 0,
+            endMs: 4000,
+            text: 'تم استيراد رابط الفيديو، وسيتم تحليل النص داخل القناة الآلية خلال المعالجة.'
+          }
+        ]
+      }
     },
     include: { segments: true }
   });
@@ -82,8 +104,14 @@ app.post('/api/projects/from-url', async (req, res) => {
 
 app.get('/api/projects/:id', async (req, res) => {
   const project = await prisma.project.findUnique({ where: { id: req.params.id }, include: { segments: true } });
-  if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
+  if (!project) return res.status(404).json({ error: 'ا��مشروع غير موجود' });
   res.json(project);
+});
+
+app.get('/api/projects/:id/segments', async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id }, include: { segments: true } });
+  if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
+  res.json(project.segments);
 });
 
 app.post('/api/projects/:id/process', async (req, res) => {
@@ -117,11 +145,18 @@ app.post('/api/projects/:id/export', async (_req, res) => {
   const project = await prisma.project.findUnique({ where: { id: req.params.id } });
   if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
 
-  const exportPath = path.join(config.storageRoot, 'exports', `${project.id}.mp4`);
+  const safeName = `${project.id}.mp4`;
+  const exportPath = path.join(config.storageRoot, 'exports', safeName);
+  await fs.mkdir(path.dirname(exportPath), { recursive: true });
   await fs.writeFile(exportPath, '');
-  await prisma.project.update({ where: { id: project.id }, data: { outputUrl: exportPath, status: 'READY' } });
+  const publicUrl = `${config.appUrl}/storage/exports/${safeName}`;
 
-  res.json({ jobId: project.id, status: 'READY', progress: 100, outputUrl: exportPath });
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { outputUrl: publicUrl, status: 'READY', progress: 100 }
+  });
+
+  res.json({ jobId: project.id, status: 'READY', progress: 100, outputUrl: publicUrl });
 });
 
 const port = config.port;

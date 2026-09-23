@@ -1,3 +1,5 @@
+import './globals.css';
+
 export const metadata = {
   title: 'YemenDub AI',
   description: 'AI dubbing for Yemeni dialects'

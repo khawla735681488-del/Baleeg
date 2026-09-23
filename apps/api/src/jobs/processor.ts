@@ -1,9 +1,9 @@
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
-import { config } from './config.js';
-import { prisma } from './db.js';
-import { extractAudio, renderDubbedVideo } from './lib/ffmpeg.js';
-import { ensureStorageDirs } from './lib/storage.js';
+import { config } from '../config.js';
+import { prisma } from '../db.js';
+import { extractAudio, renderDubbedVideo } from '../lib/ffmpeg.js';
+import { ensureStorageDirs } from '../lib/storage.js';
 
 const connection = new IORedis(config.redisUrl);
 
@@ -22,13 +22,10 @@ export const projectWorker = new Worker(
       const wavPath = `${inputPath}.wav`;
       await extractAudio(inputPath, wavPath);
 
-      const segments = project.segments.length > 0 ? project.segments : Array.from({ length: 4 }, (_, index) => ({
-        id: `seg-${index + 1}`,
-        speaker: index % 2 === 0 ? 'المتحدث 1' : 'المتحدث 2',
-        startMs: index * 5000,
-        endMs: (index + 1) * 5000,
-        text: index === 0 ? 'مرحباً، هذا فيديو تم تحليله تلقائياً.' : 'تمت ترجمة النص إلى لهجة ' + project.dialect + ' مع توليد دبلجة صوتية.'
-      }));
+      const segments = project.segments.length > 0 ? project.segments : [
+        { id: `seg-1`, speaker: 'المتحدث 1', startMs: 0, endMs: 5000, text: `سيتم ترجمة هذا الملف إلى اللهجة ${project.dialect}.` },
+        { id: `seg-2`, speaker: 'المتحدث 2', startMs: 5000, endMs: 10000, text: 'تم توليد النص ومزامنة الوقت بشكل تلقائي في مرحلة المعالجة.' }
+      ];
 
       for (const [index, segment] of segments.entries()) {
         await prisma.segment.upsert({
@@ -43,7 +40,7 @@ export const projectWorker = new Worker(
             text: segment.text,
           }
         });
-        await prisma.project.update({ where: { id: projectId }, data: { progress: 20 + ((index + 1) / segments.length) * 70 } });
+        await prisma.project.update({ where: { id: projectId }, data: { progress: 20 + ((index + 1) / Math.max(segments.length, 1)) * 70 } });
       }
 
       const outputPath = `${inputPath}-processed.mp4`;

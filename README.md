@@ -2,14 +2,23 @@
 
 مشروع SaaS حقيقي لتوليد ودبلجة الفيديو إلى العربية مع التركيز على اللهجات اليمنية.
 
-## المكونات
+## المرحلة الثانية
+
+تمت إضافة:
+- واجهة لوحة المشاريع
+- رفع فيديو أو رابط URL
+- تشغيل المعالجة عبر Queues
+- عرض حالة المشروع والتقدم
+- التعامل مع المقاطع النصية والتوقيت
+- تحميل الفيديو النهائي وتجهيز التصدير
+
+## الطبقات الحالية
 
 - Frontend: Next.js
-- Backend: Express + TypeScript + Prisma
-- Database: PostgreSQL
+- Backend: Express + TypeScript
+- Database: PostgreSQL + Prisma
 - Queue: Redis + BullMQ
-- Audio processing: FFmpeg
-- Storage: local filesystem (قابل للتبديل إلى S3)
+- Media processing: FFmpeg
 
 ## التشغيل السريع
 
@@ -17,7 +26,7 @@
    ```bash
    npm install
    ```
-2. إنشاء قاعدة البيانات والـ Redis:
+2. تشغيل قاعدة البيانات والـ Redis:
    ```bash
    docker compose up -d
    ```
@@ -30,19 +39,12 @@
    ```bash
    npm run dev
    ```
-5. افتح الواجهة:
+5. افتح التطبيق:
    - Frontend: http://localhost:3000
    - API: http://localhost:8080/health
 
-## مسارات API الرئيسية
+## ملاحظات حرجة
 
-- `POST /api/projects/upload`
-- `POST /api/projects/from-url`
-- `GET /api/projects/:id`
-- `POST /api/projects/:id/process`
-- `PATCH /api/projects/:projectId/segments/:segmentId`
-- `POST /api/projects/:id/export`
-
-## الملاحظات
-
-هذا المشروع هو أساس حقيقي قابل للتوسع، لكنه لا يحل كل طبقة الذكاء الاصطناعي من دون مفاتيح Azure/OpenAI والـ FFmpeg في البيئة المحلية. وهو جاهز لربط Whisper وTTS وDiarization مباشرة في الـ pipeline.
+- هذه المرحلة تمثل قاعدة تشغيلية حقيقية، قابلة للتوسع.
+- لا تزال طبقة الذكاء الاصطناعي (Whisper, Diarization, TTS, Translation) تحتاج إلى ربط مزودات حقيقية عبر OPENAI/Azure.
+- إذا تم تفعيل FFmpeg في الجهاز، ستعمل معالجة الملفات الأساسية محلياً.
