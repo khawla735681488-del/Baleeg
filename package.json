@@ -1,0 +1,17 @@
+{
+  "name": "yemendub-ai",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace @yemendub/api\" \"npm run dev --workspace @yemendub/web\"",
+    "build": "npm run build --workspace @yemendub/api && npm run build --workspace @yemendub/web",
+    "db:generate": "npm run db:generate --workspace @yemendub/api",
+    "db:push": "npm run db:push --workspace @yemendub/api",
+    "lint": "npm run lint --workspace @yemendub/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

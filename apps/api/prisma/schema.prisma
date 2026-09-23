@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  projects  Project[]
+}
+
+model Project {
+  id           String    @id @default(cuid())
+  userId       String?
+  user         User?     @relation(fields: [userId], references: [id])
+  name         String
+  sourceType   String    @default("upload")
+  sourceUrl    String?
+  filePath     String?
+  dialect      String    @default("صنعاني")
+  addSubtitles Boolean   @default(false)
+  status       String    @default("UPLOADED")
+  progress     Int       @default(0)
+  outputUrl    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  segments     Segment[]
+  jobs         Job[]
+}
+
+model Segment {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  speaker    String?
+  startMs    Int
+  endMs      Int
+  text       String
+  audioUrl   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Job {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type       String
+  status     String   @default("QUEUED")
+  progress   Int      @default(0)
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

@@ -1,29 +1,48 @@
-# YemenDub AI — Android
+# YemenDub AI
 
-تطبيق Android حقيقي لواجهة YemenDub AI، متصل بواجهة Backend لمعالجة الفيديو، استخراج الكلام، تحديد المتحدثين، ترجمة السياق، توليد الصوت والتصدير.
+مشروع SaaS حقيقي لتوليد ودبلجة الفيديو إلى العربية مع التركيز على اللهجات اليمنية.
 
-## التشغيل
+## المكونات
 
-1. افتح المشروع في Android Studio Hedgehog أو أحدث.
-2. شغّل `./gradlew :app:assembleDebug`.
-3. عيّن عنوان الـ Backend في `app/build.gradle.kts` عبر `BuildConfig.API_BASE_URL`. المحاكي يستخدم افتراضياً `http://10.0.2.2:8080/`.
-4. لا يتم تضمين مفاتيح مزودي الذكاء الاصطناعي داخل التطبيق؛ المصادقة والمعالجة يجب أن تكون في Backend.
+- Frontend: Next.js
+- Backend: Express + TypeScript + Prisma
+- Database: PostgreSQL
+- Queue: Redis + BullMQ
+- Audio processing: FFmpeg
+- Storage: local filesystem (قابل للتبديل إلى S3)
 
-## عقد Backend المطلوب
+## التشغيل السريع
 
-التطبيق يستخدم REST endpoints حقيقية:
+1. تثبيت التبعيات:
+   ```bash
+   npm install
+   ```
+2. إنشاء قاعدة البيانات والـ Redis:
+   ```bash
+   docker compose up -d
+   ```
+3. إنشاء قاعدة البيانات Prisma:
+   ```bash
+   npm run db:generate
+   npm run db:push
+   ```
+4. تشغيل المشروع:
+   ```bash
+   npm run dev
+   ```
+5. افتح الواجهة:
+   - Frontend: http://localhost:3000
+   - API: http://localhost:8080/health
 
-- `POST /v1/projects/upload` — multipart: `video`, `dialect`, `addSubtitles`
-- `POST /v1/projects/from-url` — `{ url, dialect, addSubtitles }`
-- `GET /v1/projects/{id}` — يعيد المشروع وحالته والمقاطع
-- `POST /v1/projects/{id}/process` — يبدأ pipeline غير متزامن
-- `PATCH /v1/projects/{id}/segments/{segmentId}` — يحفظ النص والتوقيت ويطلب إعادة توليد الصوت
-- `POST /v1/projects/{id}/export?addSubtitles=true` — يبدأ تصدير FFmpeg
+## مسارات API الرئيسية
 
-حالات المشروع المتوقعة: `UPLOADED`, `PROCESSING`, `READY`, `FAILED`. التطبيق يستطلع الحالة كل ثانيتين أثناء المعالجة ولا يزعم نجاحاً قبل رد الخادم.
+- `POST /api/projects/upload`
+- `POST /api/projects/from-url`
+- `GET /api/projects/:id`
+- `POST /api/projects/:id/process`
+- `PATCH /api/projects/:projectId/segments/:segmentId`
+- `POST /api/projects/:id/export`
 
-## ملاحظات الإنتاج
+## الملاحظات
 
-- يجب أن يتحقق الخادم من ملكية روابط الفيديو وحقوق استخدامها، وحجم/نوع الملف.
-- التخزين، Whisper/diarization، الترجمة، TTS وFFmpeg تعمل في Backend workers، وليس داخل APK.
-- لإضافة لهجة يمنية جديدة أضف قيمة إلى قائمة اللهجات واسم اللهجة في عقد الخادم.
+هذا المشروع هو أساس حقيقي قابل للتوسع، لكنه لا يحل كل طبقة الذكاء الاصطناعي من دون مفاتيح Azure/OpenAI والـ FFmpeg في البيئة المحلية. وهو جاهز لربط Whisper وTTS وDiarization مباشرة في الـ pipeline.

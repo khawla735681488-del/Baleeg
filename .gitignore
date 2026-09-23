@@ -1,0 +1,12 @@
+# .gitignore
+node_modules
+.next
+out
+dist
+.env
+.env.*
+*.log
+uploads/
+storage/
+.vscode/
+.DS_Store
