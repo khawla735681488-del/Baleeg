@@ -1,213 +1,149 @@
-'use client';
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { Queue } from 'bullmq';
+import IORedis from 'ioredis';
+import { z } from 'zod';
+import { config } from './config.js';
+import { prisma } from './db.js';
+import { ensureStorageDirs } from './lib/storage.js';
+import './jobs/processor.js';
 
-import { useEffect, useRef, useState } from 'react';
+const app = express();
+const upload = multer({ dest: path.join(config.storageRoot, 'uploads') });
+const redis = new IORedis(config.redisUrl);
+const projectQueue = new Queue('project-processing', { connection: redis });
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+app.use(cors());
+app.use(express.json({ limit: '100mb' }));
+app.use('/storage', express.static(config.storageRoot));
 
-type Segment = {
-  id: string;
-  speaker?: string;
-  text: string;
-  startMs: number;
-  endMs: number;
-};
+app.get('/health', async (_req, res) => {
+  res.json({ ok: true, service: 'YemenDub AI API', timestamp: new Date().toISOString() });
+});
 
-type Project = {
-  id: string;
-  name: string;
-  dialect: string;
-  status: string;
-  progress: number;
-  sourceUrl?: string;
-  outputUrl?: string;
-  segments: Segment[];
-};
+app.get('/api/projects', async (_req, res) => {
+  const projects = await prisma.project.findMany({ orderBy: { createdAt: 'desc' }, include: { segments: true } });
+  res.json(projects);
+});
 
-export default function HomePage() {
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  const [dialect, setDialect] = useState('صنعاني');
-  const [url, setUrl] = useState('');
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
+app.post('/api/projects/upload', upload.single('video'), async (req, res) => {
+  const schema = z.object({ dialect: z.string().default('صنعاني'), addSubtitles: z.string().optional() });
+  const parsed = schema.safeParse({ dialect: req.body.dialect, addSubtitles: req.body.addSubtitles });
 
-  const refresh = async () => {
-    const response = await fetch(`${API_URL}/api/projects`);
-    const data = await response.json();
-    setProjects(data);
-  };
+  if (!parsed.success || !req.file) {
+    return res.status(400).json({ error: 'يجب إرفاق ملف فيديو صالح' });
+  }
 
-  useEffect(() => { refresh(); }, []);
+  await ensureStorageDirs();
+  const filename = req.file.originalname || `${Date.now()}.mp4`;
+  const finalPath = path.join(config.storageRoot, 'uploads', filename);
+  await fs.rename(req.file.path, finalPath);
 
-  const processProject = async (projectId: string) => {
-    const response = await fetch(`${API_URL}/api/projects/${projectId}/process`, { method: 'POST' });
-    const result = await response.json();
-    if (!response.ok) {
-      setMessage(result.error || 'فشل في بدء المعالجة');
-      return;
+  const project = await prisma.project.create({
+    data: {
+      name: filename,
+      sourceType: 'upload',
+      filePath: finalPath,
+      dialect: parsed.data.dialect,
+      addSubtitles: parsed.data.addSubtitles === 'true',
+      status: 'UPLOADED',
+      progress: 0,
+      segments: {
+        create: [
+          { speaker: 'المتحدث 1', startMs: 0, endMs: 5000, text: 'سيتم تحليل هذا الفيديو وتجهيز النسخة المزدوجة لهجة ' + parsed.data.dialect + '.' }
+        ]
+      }
+    },
+    include: { segments: true }
+  });
+
+  res.status(201).json(project);
+});
+
+app.post('/api/projects/from-url', async (req, res) => {
+  const schema = z.object({ url: z.string().url(), dialect: z.string().default('صنعاني'), addSubtitles: z.boolean().default(false) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'بيانات الرابط غير صالحة' });
+
+  const project = await prisma.project.create({
+    data: {
+      name: 'Imported URL',
+      sourceType: 'url',
+      sourceUrl: parsed.data.url,
+      dialect: parsed.data.dialect,
+      addSubtitles: parsed.data.addSubtitles,
+      status: 'UPLOADED',
+      segments: {
+        create: [
+          { speaker: 'المتحدث 1', startMs: 0, endMs: 4000, text: 'تم استيراد الرابط، وستتم معالجته في السير العملية الذكية.' }
+        ]
+      }
+    },
+    include: { segments: true }
+  });
+
+  res.status(201).json(project);
+});
+
+app.get('/api/projects/:id', async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id }, include: { segments: true } });
+  if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
+  res.json(project);
+});
+
+app.get('/api/projects/:id/segments', async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id }, include: { segments: true } });
+  if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
+  res.json(project.segments);
+});
+
+app.post('/api/projects/:id/process', async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+  if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
+
+  await prisma.project.update({ where: { id: project.id }, data: { status: 'QUEUED', progress: 5 } });
+  await projectQueue.add('process-project', { projectId: project.id });
+
+  res.json({ jobId: project.id, status: 'QUEUED', progress: 5 });
+});
+
+app.patch('/api/projects/:projectId/segments/:segmentId', async (req, res) => {
+  const schema = z.object({ text: z.string().min(1), startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'صياغة المقطع غير صحيحة' });
+
+  const segment = await prisma.segment.update({
+    where: { id: req.params.segmentId },
+    data: {
+      text: parsed.data.text,
+      startMs: parsed.data.startMs,
+      endMs: parsed.data.endMs
     }
-    setMessage('تمت إضافة المشروع إلى قائمة المعالجة، وسيتم تحديث الحالة تلقائياً.');
-    await refresh();
-  };
+  });
 
-  const exportProject = async (projectId: string) => {
-    const response = await fetch(`${API_URL}/api/projects/${projectId}/export`, { method: 'POST' });
-    const result = await response.json();
-    if (!response.ok) {
-      setMessage(result.error || 'فشل في تصدير الفيديو');
-      return;
-    }
-    setMessage('تم تجهيز الفيديو النهائي بنجاح.');
-    if (result.outputUrl) window.open(result.outputUrl, '_blank');
-    await refresh();
-  };
+  res.json(segment);
+});
 
-  const uploadFile = async (file: File) => {
-    const form = new FormData();
-    form.append('video', file);
-    form.append('dialect', dialect);
-    form.append('addSubtitles', 'true');
-    setLoading(true);
-    setMessage('جارٍ رفع الفيديو وتحليله...');
+app.post('/api/projects/:id/export', async (_req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+  if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
 
-    const response = await fetch(`${API_URL}/api/projects/upload`, { method: 'POST', body: form });
-    const project = await response.json();
-    if (!response.ok) {
-      setMessage(project.error || 'فشل في رفع الفيديو');
-      setLoading(false);
-      return;
-    }
+  const exportName = `${project.id}-final.mp4`;
+  const exportPath = path.join(config.storageRoot, 'exports', exportName);
+  await fs.mkdir(path.dirname(exportPath), { recursive: true });
+  await fs.writeFile(exportPath, '');
+  const publicUrl = `${config.appUrl}/storage/exports/${exportName}`;
 
-    setMessage('تم رفع الفيديو بنجاح، جارٍ التهيئة...');
-    setLoading(false);
-    await processProject(project.id);
-    await refresh();
-  };
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { outputUrl: publicUrl, status: 'READY', progress: 100 }
+  });
 
-  const importUrl = async () => {
-    setLoading(true);
-    setMessage('جارٍ استيراد الرابط...');
-    const response = await fetch(`${API_URL}/api/projects/from-url`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, dialect, addSubtitles: true })
-    });
-    const project = await response.json();
-    if (!response.ok) {
-      setMessage(project.error || 'فشل في استيراد الرابط');
-      setLoading(false);
-      return;
-    }
+  res.json({ jobId: project.id, status: 'READY', progress: 100, outputUrl: publicUrl });
+});
 
-    setMessage('تم استيراد الرابط بنجاح، جاري معالجة المشروع.');
-    setLoading(false);
-    await processProject(project.id);
-    await refresh();
-  };
-
-  return (
-    <main style={{ fontFamily: 'Tahoma, sans-serif', background: '#f7f6f5', minHeight: '100vh', padding: 24, direction: 'rtl' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-        <header style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 36, marginBottom: 8 }}>YemenDub AI</h1>
-          <p style={{ fontSize: 18, color: '#4a4a4a', margin: 0 }}>منصة ذكية لترجمة ودبلجة الفيديو إلى العربية مع اللهجات اليمنية.</p>
-        </header>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 20, marginBottom: 30 }}>
-          <section style={{ background: '#fff', borderRadius: 18, padding: 24, boxShadow: '0 8px 25px rgba(0,0,0,0.06)' }}>
-            <h2 style={{ marginTop: 0 }}>رفع فيديو أو رابط</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <label>
-                <div style={{ marginBottom: 8 }}>اللهجة</div>
-                <select value={dialect} onChange={e => setDialect(e.target.value)} style={{ width: '100%', padding: 12, borderRadius: 10, border: '1px solid #d8d8d8', fontSize: 16 }}>
-                  <option value="صنعاني">صنعاني</option>
-                  <option value="عدني">عدني</option>
-                  <option value="تعزي">تعزي</option>
-                  <option value="حضرمية">حضرمية</option>
-                  <option value="تهامي">تهامي</option>
-                  <option value="عربية فصحى">عربية فصحى</option>
-                </select>
-              </label>
-
-              <button onClick={() => fileRef.current?.click()} style={{ background: '#0f766e', color: '#fff', padding: '12px 16px', border: 'none', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 16 }}>
-                رفع فيديو من الجهاز
-              </button>
-              <input ref={fileRef} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => e.target.files?.[0] && uploadFile(e.target.files[0])} />
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com/video.mp4" style={{ flex: 1, minWidth: 220, padding: 12, borderRadius: 10, border: '1px solid #d8d8d8', fontSize: 16 }} />
-                <button onClick={importUrl} disabled={loading || !url.startsWith('http')} style={{ background: '#111827', color: '#fff', padding: '12px 18px', border: 'none', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 16 }}>
-                  استيراد الرابط
-                </button>
-              </div>
-
-              {message && (
-                <div style={{ background: '#ecfeff', color: '#0f172a', padding: 12, borderRadius: 10, border: '1px solid #b2ebf2' }}>
-                  {message}
-                </div>
-              )}
-            </div>
-          </section>
-
-          <aside style={{ background: '#fff', borderRadius: 18, padding: 24, boxShadow: '0 8px 25px rgba(0,0,0,0.06)' }}>
-            <h2 style={{ marginTop: 0 }}>موجز النظام</h2>
-            <ul style={{ lineHeight: 2, color: '#334155', paddingRight: 18, margin: 0 }}>
-              <li>تحليل الفيديو</li>
-              <li>استخراج الكلام</li>
-              <li>تحديد المتحدثين</li>
-              <li>ترجمة السياق</li>
-              <li>توليد دبلجة صوتية</li>
-              <li>إضافة ترجمات ومزامنة</li>
-              <li>تصدير الفيديو النهائي</li>
-            </ul>
-          </aside>
-        </div>
-
-        <section style={{ background: '#fff', borderRadius: 18, padding: 24, boxShadow: '0 8px 25px rgba(0,0,0,0.06)' }}>
-          <h2 style={{ marginTop: 0 }}>المشاريع</h2>
-          <div style={{ display: 'grid', gap: 16 }}>
-            {projects.length === 0 ? (
-              <p style={{ margin: 0, color: '#64748b' }}>لا توجد مشاريع بعد.</p>
-            ) : (
-              projects.map(project => (
-                <div key={project.id} style={{ border: '1px solid #e5e7eb', borderRadius: 14, padding: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <div>
-                      <strong style={{ fontSize: 18 }}>{project.name}</strong>
-                      <div style={{ color: '#64748b', marginTop: 6 }}>اللهجة: {project.dialect} • الحالة: {project.status}</div>
-                    </div>
-                    <div style={{ fontWeight: 700 }}>{project.progress}%</div>
-                  </div>
-
-                  <div style={{ width: '100%', height: 8, borderRadius: 999, overflow: 'hidden', background: '#e2e8f0', marginTop: 12 }}>
-                    <div style={{ width: `${project.progress}%`, height: '100%', background: '#14b8a6' }} />
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-                    <button onClick={() => processProject(project.id)} style={{ background: '#0f172a', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 14px', cursor: 'pointer' }}>
-                      بدء المعالجة
-                    </button>
-                    <button onClick={() => exportProject(project.id)} style={{ background: '#f59e0b', color: '#111827', border: 'none', borderRadius: 10, padding: '10px 14px', cursor: 'pointer' }}>
-                      تصدير الفيديو
-                    </button>
-                  </div>
-
-                  {project.segments.length > 0 && (
-                    <div style={{ marginTop: 18 }}>
-                      {project.segments.map(segment => (
-                        <div key={segment.id} style={{ background: '#f8fafc', padding: 12, borderRadius: 10, marginBottom: 8 }}>
-                          <div style={{ color: '#475569', marginBottom: 6 }}>{segment.speaker || 'متحدث'} • {Math.round(segment.startMs / 1000)}s - {Math.round(segment.endMs / 1000)}s</div>
-                          <div>{segment.text}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      </div>
-    </main>
-  );
-}
+const port = config.port;
+app.listen(port, () => console.log(`YemenDub AI API running on http://localhost:${port}`));

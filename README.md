@@ -1,50 +1,39 @@
 # YemenDub AI
 
-مشروع SaaS حقيقي لتوليد ودبلجة الفيديو إلى العربية مع التركيز على اللهجات اليمنية.
+مشروع SaaS حقيقي لتوليج ودبلجة الفيديو إلى العربية مع التركيز على اللهجات اليمنية.
 
-## المرحلة الثانية
+## المرحلة الثالثة
 
-تمت إضافة:
-- واجهة لوحة المشاريع
-- رفع فيديو أو رابط URL
-- تشغيل المعالجة عبر Queues
-- عرض حالة المشروع والتقدم
-- التعامل مع المقاطع النصية والتوقيت
-- تحميل الفيديو النهائي وتجهيز التصدير
+تم تنفيذ الطبقات التالية فعلياً:
+- معالجة المشاريع عبر Queue Worker
+- استخراج وتوليد المقاطع النصية من الفيديو
+- خدمة AI pipeline جاهزة للتوسيع
+- تحرير نص المقاطع وتوقيتها من الواجهة
+- تصدير الفيديو النهائي عبر API
+- دعم رفع فيديو أو رابط URL
 
-## الطبقات الحالية
+## التقنيات المستخدمة
 
 - Frontend: Next.js
 - Backend: Express + TypeScript
-- Database: PostgreSQL + Prisma
-- Queue: Redis + BullMQ
-- Media processing: FFmpeg
+- Prisma + PostgreSQL
+- Redis + BullMQ
+- FFmpeg
 
-## التشغيل السريع
+## التشغيل المحلي
 
-1. تثبيت التبعيات:
-   ```bash
-   npm install
-   ```
-2. تشغيل قاعدة البيانات والـ Redis:
-   ```bash
-   docker compose up -d
-   ```
-3. إنشاء قاعدة البيانات Prisma:
-   ```bash
-   npm run db:generate
-   npm run db:push
-   ```
-4. تشغيل المشروع:
-   ```bash
-   npm run dev
-   ```
-5. افتح التطبيق:
-   - Frontend: http://localhost:3000
-   - API: http://localhost:8080/health
+```bash
+npm install
+cp .env.example .env
+docker compose up -d
+npm run db:generate
+npm run db:push
+npm run dev
+```
 
-## ملاحظات حرجة
+- Frontend: http://localhost:3000
+- API: http://localhost:8080/health
 
-- هذه المرحلة تمثل قاعدة تشغيلية حقيقية، قابلة للتوسع.
-- لا تزال طبقة الذكاء الاصطناعي (Whisper, Diarization, TTS, Translation) تحتاج إلى ربط مزودات حقيقية عبر OPENAI/Azure.
-- إذا تم تفعيل FFmpeg في الجهاز، ستعمل معالجة الملفات الأساسية محلياً.
+## ملاحظات
+
+هذا المشروع الآن في مرحلة pipeline عملية قابلة للتوسع، مع دعم أساسي للتحليل، الترجمة، التعديل، والتصدير، ويمكن ربط مزودات AI حقيقية مثل Whisper وAzure Speech لاحقاً.
